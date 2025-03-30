@@ -285,7 +285,7 @@ class DeepSpeedEngine(Module):
             self.flops_profiler = FlopsProfiler(self.module, self, self.flops_profiler_recompute_fwd_factor())
 
         if training_data:
-            self.training_dataloader = self.deepspeed_io(training_data)
+            self.training_dataloader = self.deepspeed_io(training_data, num_local_io_workers=16)
         else:
             self.training_dataloader = None
 
@@ -1420,6 +1420,7 @@ class DeepSpeedEngine(Module):
                 optimizer,
                 self.param_names,
                 timers=timers,
+                dataloader=self.training_dataloader,
                 static_loss_scale=self.loss_scale(),
                 dynamic_loss_scale=self.dynamic_loss_scale(),
                 dynamic_loss_args=self.dynamic_loss_scale_args(),

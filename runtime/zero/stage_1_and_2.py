@@ -103,6 +103,7 @@ class DeepSpeedZeroOptimizer(ZeROOptimizer):
                  init_optimizer,
                  param_names,
                  timers,
+                 dataloader,
                  static_loss_scale=1.0,
                  dynamic_loss_scale=False,
                  dynamic_loss_args=None,
@@ -159,6 +160,9 @@ class DeepSpeedZeroOptimizer(ZeROOptimizer):
         self.zero_stage_string = "ZeRO-2" if partition_grads else "ZeRO-1"
 
         self.timers = timers
+
+        # 新增对engine中dataloader的引用，后续计算encoder时load batch使用
+        self.dataloader = dataloader
 
         self.reduce_scatter = reduce_scatter
 
