@@ -164,6 +164,11 @@ class DeepSpeedZeroOptimizer(ZeROOptimizer):
         # 新增对engine中dataloader的引用，后续计算encoder时load batch使用
         self.dataloader = dataloader
 
+        self.data_iterator = iter(self.dataloader)
+
+        # 存放encoder计算结果
+        self.encoder_results = None
+        
         self.reduce_scatter = reduce_scatter
 
         self.overlap_comm = overlap_comm
@@ -382,6 +387,8 @@ class DeepSpeedZeroOptimizer(ZeROOptimizer):
         self.reduction_stream = get_accelerator().Stream()
         self.cpu_computation_stream = get_accelerator().Stream()
         self.copy_grad_stream = get_accelerator().Stream()
+        # init all_gather stream for overlap
+        self.all_gather_stream = get_accelerator().Stream()
         self.callback_queued = False
 
         self.param_dict = {}
@@ -1750,12 +1757,41 @@ class DeepSpeedZeroOptimizer(ZeROOptimizer):
         self.start_timers([OPTIMIZER_ALLGATHER])
         # Gather the updated weights from everyone.
         # Then all partitions of the model parameters are updated and ready for next round forward.
-        all_gather_dp_groups(partitioned_param_groups=self.parallel_partitioned_bit16_groups,
-                             dp_process_group=self.real_dp_process_group,
-                             start_alignment_factor=self.nccl_start_alignment_factor,
-                             allgather_bucket_size=self.allgather_bucket_size)
+        get_accelerator().synchronize()
+        with get_accelerator().stream(self.all_gather_stream):
+            all_gather_dp_groups(partitioned_param_groups=self.parallel_partitioned_bit16_groups,
+                                dp_process_group=self.real_dp_process_group,
+                                start_alignment_factor=self.nccl_start_alignment_factor,
+                                allgather_bucket_size=self.allgather_bucket_size)
 
-        self.stop_timers([OPTIMIZER_ALLGATHER])
+        
+        # device_rank = self.local_rank
+        # self.device = torch.device(get_accelerator().device_name(), device_rank)
+        # if torch.is_tensor(batch[0]):
+        #     loaded = batch[0].clone().to("cuda").detach()
+        #     # 探索一下为什么？
+        #     loaded.requires_grad = loaded.is_floating_point()
+        # else:
+        #     assert isinstance(batch[0], (tuple, list))
+        #     # Assume list or tuple
+        #     loaded = []
+        #     for x in batch[0]:
+        #         assert torch.is_tensor(x)
+        #         mine = x.clone().detach().to("cuda")
+        #         mine.requires_grad = mine.is_floating_point() 
+        #         loaded.append(mine)
+        #     loaded = tuple(loaded)   
+        inputs = ()
+        batch = next(self.data_iterator)
+        images = batch['images']
+        batch['images'] = images.to(torch.bfloat16)
+        for key, value in batch.items():
+            batch[key] = value.cuda()
+        
+        # 计算encoder
+        self.encoder_results = self.module.encoder(*inputs, **batch)
+
+        get_accelerator().synchronize(self.all_gather_stream)
 
         # TODO: we probably don't need this? just to be safe
         for i in range(len(self.bit16_groups)):
