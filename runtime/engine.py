@@ -1672,13 +1672,25 @@ class DeepSpeedEngine(Module):
         return scaled_loss
 
     @instrument_w_nvtx
-    def forward(self, *inputs, **kwargs):
+    def forward(self):
         r"""Execute forward propagation
         Arguments:
             *inputs: Variable length input list
             **kwargs: variable length keyword arguments
         """
-
+        # kwargs here is batch now, or say the reak inputs
+        # inputs is always the empty tuple
+        # 这个地方的输入和原来还是有点不一样，原来的image就是list，
+        # 为了方便这个地方的改动，image在train.py中stack成tensor传进来了
+        inputs = ()
+        self.data_iterator = iter(self.training_dataloader)
+        batch = next(self.data_iterator)
+        images = batch['images']
+        batch['images'] = images.to(torch.bfloat16)
+        for key, value in batch.items():
+            batch[key] = value.cuda()
+        # 这个地方batch字典有以下key:
+        # input_ids、labels、attention_mask、images
         if self.autotuning_profile_model_info():
             ma = get_ma_status()
         else:
@@ -1706,7 +1718,7 @@ class DeepSpeedEngine(Module):
 
         if self.module.training:
             if self.progressive_layer_drop:
-                kwargs.update(self.progressive_layer_drop.get_state())
+                batch.update(self.progressive_layer_drop.get_state())
 
         if self.__class__.__name__ != "PipelineEngine":
             # TODO: The above if condition is a HACK since for PipelineEngine
@@ -1714,7 +1726,7 @@ class DeepSpeedEngine(Module):
             if self.module.training and self.curriculum_enabled_legacy():
                 self.curriculum_scheduler_legacy.update_difficulty(self.global_steps + 1)
                 if self.curriculum_params_legacy()["curriculum_type"] == "seqlen":
-                    kwargs.update({"curriculum_seqlen": self.curriculum_scheduler_legacy.get_current_difficulty()})
+                    batch.update({"curriculum_seqlen": self.curriculum_scheduler_legacy.get_current_difficulty()})
 
         if self.module.training and self.random_ltd_enabled():
             self.random_ltd_scheduler.update_seq(self.global_steps)
@@ -1733,7 +1745,7 @@ class DeepSpeedEngine(Module):
         if self.fp16_auto_cast():
             inputs = self._cast_inputs_half(inputs)
 
-        loss = self.module(*inputs, **kwargs)
+        loss = self.module(*inputs, **batch)
 
         if self.zero_optimization_partition_weights():
             # Disable automated discovery of external parameters
