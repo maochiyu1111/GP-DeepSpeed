@@ -1789,9 +1789,10 @@ class DeepSpeedZeroOptimizer(ZeROOptimizer):
             batch[key] = value.cuda()
         
         # 计算encoder
-        self.encoder_results = self.module.encoder(*inputs, **batch)
+        self.encoder_results = self.module(only_encoder=True, *inputs, **batch)
 
         get_accelerator().synchronize(self.all_gather_stream)
+        self.stop_timers([OPTIMIZER_ALLGATHER])
 
         # TODO: we probably don't need this? just to be safe
         for i in range(len(self.bit16_groups)):

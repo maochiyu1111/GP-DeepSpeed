@@ -364,6 +364,9 @@ class DeepSpeedEngine(Module):
         self.flatten = _flatten_dense_tensors
         self.unflatten = _unflatten_dense_tensors
 
+        # log training_step to control the behavior of forward()
+        self.training_step = 0
+
     def destroy(self):
         if self.optimizer is not None and hasattr(self.optimizer, 'destroy'):
             self.optimizer.destroy()
@@ -830,6 +833,10 @@ class DeepSpeedEngine(Module):
 
     def aio_config(self):
         return self._config.aio_config
+
+    # to control the behavior of forward()
+    def need_load_batch(self):
+        return self.training_step == 0
 
     def get_data_types(self):
         model_dtype = torch.float32
@@ -1678,19 +1685,40 @@ class DeepSpeedEngine(Module):
             *inputs: Variable length input list
             **kwargs: variable length keyword arguments
         """
-        # kwargs here is batch now, or say the reak inputs
+        # kwargs here is batch now, or say the real inputs
         # inputs is always the empty tuple
         # 这个地方的输入和原来还是有点不一样，原来的image就是list，
         # 为了方便这个地方的改动，image在train.py中stack成tensor传进来了
         inputs = ()
-        self.data_iterator = iter(self.training_dataloader)
-        batch = next(self.data_iterator)
-        images = batch['images']
-        batch['images'] = images.to(torch.bfloat16)
-        for key, value in batch.items():
-            batch[key] = value.cuda()
-        # 这个地方batch字典有以下key:
-        # input_ids、labels、attention_mask、images
+        if self.need_load_batch(): 
+            self.data_iterator = iter(self.training_dataloader)
+            batch = next(self.data_iterator)
+            images = batch['images']
+            batch['images'] = images.to(torch.bfloat16)
+            for key, value in batch.items():
+                batch[key] = value.cuda()
+            # 这个地方batch字典有以下key:
+            # input_ids、labels、attention_mask、images
+        else:
+            (
+                input_ids, 
+                position_ids, 
+                attention_mask, 
+                past_key_values, 
+                inputs_embeds, 
+                labels
+            ) = self.optimizer.encoder_results
+            
+            batch = {
+                'input_ids': input_ids,
+                'position_ids': position_ids,
+                'attention_mask': attention_mask,
+                'past_key_values': past_key_values,
+                'inputs_embeds': inputs_embeds,
+                'labels': labels
+            }
+
+        self.training_step += 1
         if self.autotuning_profile_model_info():
             ma = get_ma_status()
         else:
