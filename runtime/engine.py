@@ -1428,6 +1428,7 @@ class DeepSpeedEngine(Module):
                 self.param_names,
                 timers=timers,
                 dataloader=self.training_dataloader,
+                module = self.module,
                 static_loss_scale=self.loss_scale(),
                 dynamic_loss_scale=self.dynamic_loss_scale(),
                 dynamic_loss_args=self.dynamic_loss_scale_args(),
